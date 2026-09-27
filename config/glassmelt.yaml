@@ -10,6 +10,21 @@ limits:
     melt_temp_min_c: 1380.0
     melt_temp_max_c: 1470.0
     draft_target_pa: -18.0
+  refractory:
+    watch_c: 320.0
+    warn_c: 360.0
+    alarm_c: 400.0
+    clear_hysteresis_c: 10.0
+    rise_watch_c_per_min: 0.5
+    rise_confirm_c_per_min: 1.0
+    rise_alarm_c_per_min: 3.0
+    confirm_windows: 3
+    window_s: 900.0
+    min_samples: 4
+    dev_watch_c: 25.0
+    clear_hold_s: 300.0
+    sensor_max_step_c: 60.0
+    kiln_alarm_regions: 2
   burner:
     air_min_flow_m3_h: 5200.0
     gas_max_m3_h: 620.0

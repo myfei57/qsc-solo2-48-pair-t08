@@ -91,6 +91,68 @@ class FurnaceLimits:
 
 
 @dataclass(frozen=True)
+class RefractoryLimits:
+    """窑体耐火砖测点的热点与趋势判定约束。"""
+
+    watch_c: float
+    warn_c: float
+    alarm_c: float
+    clear_hysteresis_c: float
+    rise_watch_c_per_min: float
+    rise_confirm_c_per_min: float
+    rise_alarm_c_per_min: float
+    confirm_windows: int
+    window_s: float
+    min_samples: int
+    dev_watch_c: float
+    clear_hold_s: float
+    sensor_max_step_c: float
+    kiln_alarm_regions: int
+
+    @classmethod
+    def from_mapping(cls, section: Mapping[str, Any]) -> "RefractoryLimits":
+        limits = cls(
+            watch_c=_number(section, "watch_c"),
+            warn_c=_number(section, "warn_c"),
+            alarm_c=_number(section, "alarm_c"),
+            clear_hysteresis_c=_number(section, "clear_hysteresis_c", minimum=0.0),
+            rise_watch_c_per_min=_number(section, "rise_watch_c_per_min", minimum=0.0),
+            rise_confirm_c_per_min=_number(section, "rise_confirm_c_per_min", minimum=0.0),
+            rise_alarm_c_per_min=_number(section, "rise_alarm_c_per_min", minimum=0.0),
+            confirm_windows=int(_number(section, "confirm_windows", minimum=1.0)),
+            window_s=_number(section, "window_s", minimum=1.0),
+            min_samples=int(_number(section, "min_samples", minimum=2.0)),
+            dev_watch_c=_number(section, "dev_watch_c", minimum=0.0),
+            clear_hold_s=_number(section, "clear_hold_s", minimum=0.0),
+            sensor_max_step_c=_number(section, "sensor_max_step_c", minimum=0.0),
+            kiln_alarm_regions=int(_number(section, "kiln_alarm_regions", minimum=1.0)),
+        )
+        if not limits.watch_c < limits.warn_c < limits.alarm_c:
+            raise ConfigError("耐火砖温度限值必须满足 关注 < 预警 < 报警", component="config")
+        rates_ordered = (
+            0.0
+            < limits.rise_watch_c_per_min
+            <= limits.rise_confirm_c_per_min
+            <= limits.rise_alarm_c_per_min
+        )
+        if not rates_ordered:
+            raise ConfigError("升温速率限值必须满足 0 < 关注 ≤ 确认 ≤ 急促", component="config")
+        if limits.clear_hysteresis_c <= 0:
+            raise ConfigError("复位回差必须为正", component="config")
+        if limits.confirm_windows < 2:
+            raise ConfigError("趋势确认窗口数不得小于 2", component="config")
+        if limits.min_samples < 3:
+            raise ConfigError("趋势窗口的最少样本数不得小于 3", component="config")
+        if limits.dev_watch_c <= 0:
+            raise ConfigError("片区偏差关注值必须为正", component="config")
+        if limits.sensor_max_step_c <= 0:
+            raise ConfigError("测点突变门限必须为正", component="config")
+        if limits.kiln_alarm_regions < 2:
+            raise ConfigError("整窑报警至少需要两个片区同时报警", component="config")
+        return limits
+
+
+@dataclass(frozen=True)
 class BurnerLimits:
     """燃烧器与分区燃烧约束。"""
 
@@ -334,6 +396,7 @@ class PlatformConfig:
     project_id: str
     storage_root: str
     furnace: FurnaceLimits
+    refractory: RefractoryLimits
     burner: BurnerLimits
     forehearth: ForehearthLimits
     temp: TempLimits
@@ -369,6 +432,7 @@ class PlatformConfig:
             project_id=project_id,
             storage_root=storage_root,
             furnace=FurnaceLimits.from_mapping(_section(limits, "furnace")),
+            refractory=RefractoryLimits.from_mapping(_section(limits, "refractory")),
             burner=BurnerLimits.from_mapping(_section(limits, "burner")),
             forehearth=ForehearthLimits.from_mapping(_section(limits, "forehearth")),
             temp=TempLimits.from_mapping(_section(limits, "temp")),
@@ -406,6 +470,22 @@ def default_config() -> PlatformConfig:
             melt_temp_min_c=1380.0,
             melt_temp_max_c=1470.0,
             draft_target_pa=-18.0,
+        ),
+        refractory=RefractoryLimits(
+            watch_c=320.0,
+            warn_c=360.0,
+            alarm_c=400.0,
+            clear_hysteresis_c=10.0,
+            rise_watch_c_per_min=0.5,
+            rise_confirm_c_per_min=1.0,
+            rise_alarm_c_per_min=3.0,
+            confirm_windows=3,
+            window_s=900.0,
+            min_samples=4,
+            dev_watch_c=25.0,
+            clear_hold_s=300.0,
+            sensor_max_step_c=60.0,
+            kiln_alarm_regions=2,
         ),
         burner=BurnerLimits(
             air_min_flow_m3_h=5200.0,
@@ -472,6 +552,22 @@ def config_to_mapping(cfg: PlatformConfig) -> dict:
                 "melt_temp_min_c": cfg.furnace.melt_temp_min_c,
                 "melt_temp_max_c": cfg.furnace.melt_temp_max_c,
                 "draft_target_pa": cfg.furnace.draft_target_pa,
+            },
+            "refractory": {
+                "watch_c": cfg.refractory.watch_c,
+                "warn_c": cfg.refractory.warn_c,
+                "alarm_c": cfg.refractory.alarm_c,
+                "clear_hysteresis_c": cfg.refractory.clear_hysteresis_c,
+                "rise_watch_c_per_min": cfg.refractory.rise_watch_c_per_min,
+                "rise_confirm_c_per_min": cfg.refractory.rise_confirm_c_per_min,
+                "rise_alarm_c_per_min": cfg.refractory.rise_alarm_c_per_min,
+                "confirm_windows": cfg.refractory.confirm_windows,
+                "window_s": cfg.refractory.window_s,
+                "min_samples": cfg.refractory.min_samples,
+                "dev_watch_c": cfg.refractory.dev_watch_c,
+                "clear_hold_s": cfg.refractory.clear_hold_s,
+                "sensor_max_step_c": cfg.refractory.sensor_max_step_c,
+                "kiln_alarm_regions": cfg.refractory.kiln_alarm_regions,
             },
             "burner": {
                 "air_min_flow_m3_h": cfg.burner.air_min_flow_m3_h,

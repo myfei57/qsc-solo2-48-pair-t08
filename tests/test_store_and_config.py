@@ -98,6 +98,7 @@ def test_load_config_matches_defaults():
     assert loaded.project_id == default.project_id
     assert loaded.pages == default.pages
     assert loaded.furnace == default.furnace
+    assert loaded.refractory == default.refractory
     assert loaded.burner == default.burner
     assert loaded.feeder == default.feeder
     assert loaded.lehr == default.lehr

@@ -33,6 +33,7 @@ from .furnace.draft import DraftFan
 from .furnace.gas import GasValve
 from .furnace.level import GlassLevel
 from .furnace.mix import MixPlanner
+from .furnace.refractory import RefractoryMonitor
 from .furnace.temp import FurnaceTemperature
 from .lehr.anneal import AnnealZones
 from .lehr.belt import BeltDrive
@@ -52,6 +53,14 @@ from .temp.trip import TripInterlock
 from .telemetry import TrendBuffer
 
 DEFAULT_UNIT = "tank1"
+
+#: 各片区窑体表面温度的演示基准（℃），控制周期按负荷在此基础上浮动。
+_REFRACTORY_BASE_C = {
+    "crown": 305.0,
+    "breastwall": 285.0,
+    "sidewall": 265.0,
+    "regenerator": 245.0,
+}
 
 #: 启动顺序的硬约束：(先发生的步骤, 必须后发生的步骤, 说明)
 START_ORDER_RULES: tuple[tuple[str, str, str], ...] = (
@@ -140,6 +149,7 @@ class Platform:
 
         self.level = GlassLevel(self.clock, self.bus, self.config.furnace)
         self.furnace_temp = FurnaceTemperature(self.bus, self.config.furnace)
+        self.refractory = RefractoryMonitor(self.clock, self.bus, self.config.refractory)
         self.mix = MixPlanner(self.bus, self.config.batch)
         self.draft = DraftFan(self.bus, self.config.furnace)
         self.gas = GasValve(self.bus, self.config.burner.gas_max_m3_h)
@@ -186,6 +196,7 @@ class Platform:
             ("batch", "scale", "batch-scale"),
             ("furnace", "level", "glass-level-probe"),
             ("furnace", "melt_temp", "thermocouple"),
+            ("furnace", "refractory", "refractory-thermocouple"),
             ("furnace", "draft", "draft-fan"),
             ("burner", "air", "combustion-air-fan"),
             ("burner", "gas", "gas-control-valve"),
@@ -345,12 +356,16 @@ class Platform:
 
             anneal = self.evaluate_anneal(self._anneal_temperature(state.load))
 
+            refractory_readings = self._refractory_readings(state.load)
+            refractory = self.observe_refractory(refractory_readings)
+
             self.trend.append("melt_temp", moment, self.furnace_temp.temperature_c)
             self.trend.append("level_mm", moment, self.level.level_mm)
             self.trend.append("forehearth_temp", moment, self.forehearth_temp.temperature_c)
             self.trend.append("gob_mass_g", moment, gob.mass_g)
             self.trend.append("belt_speed", moment, anneal["belt"]["speed_m_per_min"])
             self.trend.append("heater_power_pct", moment, anneal["heater"]["power_pct"])
+            self.trend.append("refractory_max_c", moment, max(refractory_readings.values()))
 
             return {
                 "cycle": self._cycles,
@@ -370,6 +385,7 @@ class Platform:
                 "forming": run.as_dict(),
                 "anneal": anneal,
                 "zones": self.zones.snapshot(),
+                "refractory": refractory,
             }
 
     def evaluate_anneal(self, temperature_c: float) -> dict:
@@ -398,6 +414,22 @@ class Platform:
 
         overshoot = (self.heater.power_pct - 50.0) * 0.5
         return self.anneal.mean_c() + overshoot + float(load) * 4.0
+
+    def _refractory_readings(self, load: float) -> dict[str, float]:
+        """按负荷推算各测点的窑体表面温度（演示用工况）。"""
+
+        readings = {}
+        for point_id, region in self.refractory.point_regions().items():
+            base = _REFRACTORY_BASE_C.get(region, 255.0)
+            offset = (sum(ord(ch) for ch in point_id) % 5) - 2.0
+            readings[point_id] = base + load * 8.0 + offset
+        return readings
+
+    def observe_refractory(self, readings: dict[str, float]) -> dict:
+        """录入一批窑体耐火砖测点温度，返回整窑判定汇总。"""
+
+        with self._lock:
+            return self.refractory.observe_many(readings)
 
     def start_charging(self, path: str = "start") -> dict:
         """按给定路径投料：正常启动走 start，联锁恢复走 resume。"""
@@ -669,6 +701,7 @@ class Platform:
             "utc": self.clock.utc_iso(),
             "level": self.level.snapshot(),
             "melt_temp": self.furnace_temp.snapshot(),
+            "refractory": self.refractory.snapshot(),
             "mix": self.mix.snapshot(),
             "draft": self.draft.snapshot(),
             "gas": self.gas.snapshot(),
@@ -721,6 +754,7 @@ def build_platform(
             project_id=effective.project_id,
             storage_root=os.path.abspath(storage_root),
             furnace=effective.furnace,
+            refractory=effective.refractory,
             burner=effective.burner,
             forehearth=effective.forehearth,
             temp=effective.temp,
