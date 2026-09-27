@@ -112,6 +112,20 @@ def test_audit_and_journal_interfaces(console):
     assert "count" in alarms
 
 
+def test_refractory_interfaces(console):
+    _server, base = console
+    _post(f"{base}/api/start")
+    status, payload = _post(
+        f"{base}/api/furnace/refractory", {"point": "crown-e1", "temperature_c": 291.0}
+    )
+    assert status == 200 and payload["ok"] is True
+    assert payload["result"]["point"]["region"] == "crown-east"
+    status, snapshot = _get(f"{base}/api/refractory")
+    assert status == 200
+    assert snapshot["overall"] == "normal"
+    assert any(point["point"] == "crown-e1" for point in snapshot["points"])
+
+
 def test_unknown_routes_are_reported(console):
     _server, base = console
     status, payload = _get(f"{base}/api/nope")

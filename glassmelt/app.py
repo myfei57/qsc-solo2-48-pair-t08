@@ -33,6 +33,7 @@ from .furnace.draft import DraftFan
 from .furnace.gas import GasValve
 from .furnace.level import GlassLevel
 from .furnace.mix import MixPlanner
+from .furnace.refractory import RefractoryMonitor
 from .furnace.temp import FurnaceTemperature
 from .lehr.anneal import AnnealZones
 from .lehr.belt import BeltDrive
@@ -140,6 +141,7 @@ class Platform:
 
         self.level = GlassLevel(self.clock, self.bus, self.config.furnace)
         self.furnace_temp = FurnaceTemperature(self.bus, self.config.furnace)
+        self.refractory = RefractoryMonitor(self.clock, self.bus, self.config.refractory)
         self.mix = MixPlanner(self.bus, self.config.batch)
         self.draft = DraftFan(self.bus, self.config.furnace)
         self.gas = GasValve(self.bus, self.config.burner.gas_max_m3_h)
@@ -186,6 +188,7 @@ class Platform:
             ("batch", "scale", "batch-scale"),
             ("furnace", "level", "glass-level-probe"),
             ("furnace", "melt_temp", "thermocouple"),
+            ("furnace", "refractory", "refractory-thermocouple"),
             ("furnace", "draft", "draft-fan"),
             ("burner", "air", "combustion-air-fan"),
             ("burner", "gas", "gas-control-valve"),
@@ -345,12 +348,16 @@ class Platform:
 
             anneal = self.evaluate_anneal(self._anneal_temperature(state.load))
 
+            self._feed_refractory()
+            refractory = self.evaluate_refractory()
+
             self.trend.append("melt_temp", moment, self.furnace_temp.temperature_c)
             self.trend.append("level_mm", moment, self.level.level_mm)
             self.trend.append("forehearth_temp", moment, self.forehearth_temp.temperature_c)
             self.trend.append("gob_mass_g", moment, gob.mass_g)
             self.trend.append("belt_speed", moment, anneal["belt"]["speed_m_per_min"])
             self.trend.append("heater_power_pct", moment, anneal["heater"]["power_pct"])
+            self.trend.append("refractory_max_c", moment, refractory["max_point_c"])
 
             return {
                 "cycle": self._cycles,
@@ -369,6 +376,7 @@ class Platform:
                 "cut": cut.as_dict(),
                 "forming": run.as_dict(),
                 "anneal": anneal,
+                "refractory": refractory,
                 "zones": self.zones.snapshot(),
             }
 
@@ -398,6 +406,26 @@ class Platform:
 
         overshoot = (self.heater.power_pct - 50.0) * 0.5
         return self.anneal.mean_c() + overshoot + float(load) * 4.0
+
+    def _feed_refractory(self) -> None:
+        """按测点基线生成本周期窑体扫描读数（健康窑体是平稳基线）。"""
+
+        for index, point in enumerate(self.config.refractory.all_points()):
+            self.refractory.observe(point, 285.0 + 4.0 * index)
+
+    def observe_refractory(
+        self, point: str, temperature_c: float, at: float | None = None
+    ) -> dict:
+        """录入一个耐火砖测点读数（人工点检或窑体扫描），返回该点的现场判定。"""
+
+        with self._lock:
+            return self.refractory.observe(point, temperature_c, at=at).as_dict()
+
+    def evaluate_refractory(self) -> dict:
+        """按全部测点的历史读数现场判定各区域热点与升温趋势。"""
+
+        with self._lock:
+            return self.refractory.evaluate()
 
     def start_charging(self, path: str = "start") -> dict:
         """按给定路径投料：正常启动走 start，联锁恢复走 resume。"""
@@ -629,6 +657,7 @@ class Platform:
                 "/api/audit",
                 "/api/journal",
                 "/api/readiness",
+                "/api/refractory",
                 "/api/batch/start",
                 "/api/burner/ignite",
                 "/api/burner/trip",
@@ -638,6 +667,7 @@ class Platform:
                 "/api/scale/calibrate",
                 "/api/furnace/clear",
                 "/api/furnace/rebuild",
+                "/api/furnace/refractory",
                 "/api/cycle",
                 "/api/start",
                 "/api/stop",
@@ -669,6 +699,7 @@ class Platform:
             "utc": self.clock.utc_iso(),
             "level": self.level.snapshot(),
             "melt_temp": self.furnace_temp.snapshot(),
+            "refractory": self.refractory.snapshot(),
             "mix": self.mix.snapshot(),
             "draft": self.draft.snapshot(),
             "gas": self.gas.snapshot(),
@@ -721,6 +752,7 @@ def build_platform(
             project_id=effective.project_id,
             storage_root=os.path.abspath(storage_root),
             furnace=effective.furnace,
+            refractory=effective.refractory,
             burner=effective.burner,
             forehearth=effective.forehearth,
             temp=effective.temp,

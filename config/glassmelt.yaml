@@ -10,6 +10,21 @@ limits:
     melt_temp_min_c: 1380.0
     melt_temp_max_c: 1470.0
     draft_target_pa: -18.0
+  refractory:
+    watch_rise_c_per_min: 0.6
+    alarm_rise_c_per_min: 1.5
+    min_trend_samples: 4
+    min_span_s: 120.0
+    window_s: 300.0
+    hot_delta_c: 30.0
+    confirm_cycles: 2
+    clear_cycles: 3
+    regions:
+      crown-east: [crown-e1, crown-e2, crown-e3]
+      crown-west: [crown-w1, crown-w2, crown-w3]
+      sidewall-east: [wall-e1, wall-e2]
+      sidewall-west: [wall-w1, wall-w2]
+      tank-bottom: [bottom-1, bottom-2]
   burner:
     air_min_flow_m3_h: 5200.0
     gas_max_m3_h: 620.0

@@ -91,6 +91,106 @@ class FurnaceLimits:
 
 
 @dataclass(frozen=True)
+class RefractoryLimits:
+    """窑体耐火砖多测点监测约束。"""
+
+    watch_rise_c_per_min: float
+    alarm_rise_c_per_min: float
+    min_trend_samples: int
+    min_span_s: float
+    window_s: float
+    hot_delta_c: float
+    confirm_cycles: int
+    clear_cycles: int
+    regions: tuple[tuple[str, tuple[str, ...]], ...]
+
+    @classmethod
+    def from_mapping(cls, section: Mapping[str, Any]) -> "RefractoryLimits":
+        raw_regions = section.get("regions")
+        if not isinstance(raw_regions, Mapping) or not raw_regions:
+            raise ConfigError(
+                "refractory.regions 必须是非空的区域测点映射", component="config"
+            )
+        regions: list[tuple[str, tuple[str, ...]]] = []
+        seen: set[str] = set()
+        for name, points in raw_regions.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ConfigError("耐火砖区域名必须是非空字符串", component="config")
+            if not isinstance(points, list) or not points:
+                raise ConfigError(
+                    f"耐火砖区域 {name} 至少需要一个测点", component="config"
+                )
+            cleaned: list[str] = []
+            for point in points:
+                if not isinstance(point, str) or not point.strip():
+                    raise ConfigError(
+                        f"耐火砖区域 {name} 的测点名必须是非空字符串",
+                        component="config",
+                    )
+                if point in seen:
+                    raise ConfigError(
+                        f"耐火砖测点重复登记: {point}", component="config"
+                    )
+                seen.add(point)
+                cleaned.append(point)
+            regions.append((name, tuple(cleaned)))
+        limits = cls(
+            watch_rise_c_per_min=_number(section, "watch_rise_c_per_min", minimum=0.0),
+            alarm_rise_c_per_min=_number(section, "alarm_rise_c_per_min", minimum=0.0),
+            min_trend_samples=int(_number(section, "min_trend_samples", minimum=2.0)),
+            min_span_s=_number(section, "min_span_s", minimum=0.0),
+            window_s=_number(section, "window_s", minimum=0.0),
+            hot_delta_c=_number(section, "hot_delta_c", minimum=0.0),
+            confirm_cycles=int(_number(section, "confirm_cycles", minimum=1.0)),
+            clear_cycles=int(_number(section, "clear_cycles", minimum=1.0)),
+            regions=tuple(regions),
+        )
+        if (
+            limits.watch_rise_c_per_min <= 0
+            or limits.alarm_rise_c_per_min <= limits.watch_rise_c_per_min
+        ):
+            raise ConfigError("升温速率必须满足 0 < 待观察值 < 预警值", component="config")
+        if limits.min_span_s <= 0 or limits.window_s < limits.min_span_s:
+            raise ConfigError("趋势窗口必须为正且不小于最小判定跨度", component="config")
+        if limits.hot_delta_c <= 0:
+            raise ConfigError("热点温差必须为正", component="config")
+        return limits
+
+    def region_names(self) -> tuple[str, ...]:
+        """按配置顺序返回全部区域名。"""
+
+        return tuple(name for name, _points in self.regions)
+
+    def points_in(self, region: str) -> tuple[str, ...]:
+        """返回区域内的测点；未知区域返回空。"""
+
+        for name, points in self.regions:
+            if name == region:
+                return points
+        return ()
+
+    def all_points(self) -> tuple[str, ...]:
+        """按配置顺序返回全部测点名。"""
+
+        return tuple(point for _name, points in self.regions for point in points)
+
+    def point_region_map(self) -> dict[str, str]:
+        """测点到区域的映射。"""
+
+        return {point: name for name, points in self.regions for point in points}
+
+    def quorum(self, region: str) -> int:
+        """区域预警所需的最少确认测点数：至少两个且不少于区域一半。
+
+        单测点区域因此永远到不了预警档，只能停在待观察——一个点的异常
+        不构成"一片区域"。
+        """
+
+        count = len(self.points_in(region))
+        return max(2, (count + 1) // 2)
+
+
+@dataclass(frozen=True)
 class BurnerLimits:
     """燃烧器与分区燃烧约束。"""
 
@@ -334,6 +434,7 @@ class PlatformConfig:
     project_id: str
     storage_root: str
     furnace: FurnaceLimits
+    refractory: RefractoryLimits
     burner: BurnerLimits
     forehearth: ForehearthLimits
     temp: TempLimits
@@ -369,6 +470,7 @@ class PlatformConfig:
             project_id=project_id,
             storage_root=storage_root,
             furnace=FurnaceLimits.from_mapping(_section(limits, "furnace")),
+            refractory=RefractoryLimits.from_mapping(_section(limits, "refractory")),
             burner=BurnerLimits.from_mapping(_section(limits, "burner")),
             forehearth=ForehearthLimits.from_mapping(_section(limits, "forehearth")),
             temp=TempLimits.from_mapping(_section(limits, "temp")),
@@ -406,6 +508,23 @@ def default_config() -> PlatformConfig:
             melt_temp_min_c=1380.0,
             melt_temp_max_c=1470.0,
             draft_target_pa=-18.0,
+        ),
+        refractory=RefractoryLimits(
+            watch_rise_c_per_min=0.6,
+            alarm_rise_c_per_min=1.5,
+            min_trend_samples=4,
+            min_span_s=120.0,
+            window_s=300.0,
+            hot_delta_c=30.0,
+            confirm_cycles=2,
+            clear_cycles=3,
+            regions=(
+                ("crown-east", ("crown-e1", "crown-e2", "crown-e3")),
+                ("crown-west", ("crown-w1", "crown-w2", "crown-w3")),
+                ("sidewall-east", ("wall-e1", "wall-e2")),
+                ("sidewall-west", ("wall-w1", "wall-w2")),
+                ("tank-bottom", ("bottom-1", "bottom-2")),
+            ),
         ),
         burner=BurnerLimits(
             air_min_flow_m3_h=5200.0,
@@ -472,6 +591,19 @@ def config_to_mapping(cfg: PlatformConfig) -> dict:
                 "melt_temp_min_c": cfg.furnace.melt_temp_min_c,
                 "melt_temp_max_c": cfg.furnace.melt_temp_max_c,
                 "draft_target_pa": cfg.furnace.draft_target_pa,
+            },
+            "refractory": {
+                "watch_rise_c_per_min": cfg.refractory.watch_rise_c_per_min,
+                "alarm_rise_c_per_min": cfg.refractory.alarm_rise_c_per_min,
+                "min_trend_samples": cfg.refractory.min_trend_samples,
+                "min_span_s": cfg.refractory.min_span_s,
+                "window_s": cfg.refractory.window_s,
+                "hot_delta_c": cfg.refractory.hot_delta_c,
+                "confirm_cycles": cfg.refractory.confirm_cycles,
+                "clear_cycles": cfg.refractory.clear_cycles,
+                "regions": {
+                    name: list(points) for name, points in cfg.refractory.regions
+                },
             },
             "burner": {
                 "air_min_flow_m3_h": cfg.burner.air_min_flow_m3_h,

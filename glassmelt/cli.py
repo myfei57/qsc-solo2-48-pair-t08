@@ -71,6 +71,18 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     platform.scale.restore()
 
     startup = platform.start()
+
+    # 演示窑体耐火砖监测：给第一个区域补一段持续升温的点检历史，区域判定
+    # 应在确认周期后升级为预警并指出位置；其余区域保持正常。
+    now = clock.now()
+    demo_region = platform.config.refractory.region_names()[0]
+    for step, offset in enumerate((-240.0, -160.0, -80.0, 0.0)):
+        for point in platform.config.refractory.points_in(demo_region):
+            platform.observe_refractory(point, 285.0 + 3.0 * step, at=now + offset)
+    refractory_scan = {}
+    for _ in range(platform.config.refractory.confirm_cycles):
+        refractory_scan = platform.evaluate_refractory()
+
     cycles = [
         platform.cycle(
             CycleInputs(
@@ -107,6 +119,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
     report = {
         "startup": startup,
+        "refractory_scan": refractory_scan,
         "cycles_run": len(cycles),
         "last_cycle": cycles[-1] if cycles else None,
         "resume": resume,
@@ -127,6 +140,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     failures = list(startup["violations"]) + list(shutdown["violations"])
     failures += [name for name, item in probe.items() if not item["ok"]]
     failures += startup["topology_missing"]
+    if refractory_scan.get("overall") != "alarm":
+        failures.append("refractory_scan")
     if failures:
         print(f"检查未通过: {failures}", file=sys.stderr)
         return 1

@@ -74,6 +74,23 @@ class ConsoleAPI:
 
         return self.platform.readiness_report()
 
+    def refractory(self) -> dict:
+        """窑体耐火砖监测：整窑结论、各区域状态与测点明细。"""
+
+        return self.platform.refractory.snapshot()
+
+    def record_refractory(self, payload: dict) -> dict:
+        """录入一次人工点检／窑体扫描读数，并现场重判各区域。"""
+
+        point = str(payload.get("point", ""))
+        temperature = float(payload.get("temperature_c", 0.0))
+
+        def action() -> dict:
+            evaluation = self.platform.observe_refractory(point, temperature)
+            return {"point": evaluation, "refractory": self.platform.evaluate_refractory()}
+
+        return self._guard(action)
+
     def start_batch(self, payload: dict) -> dict:
         path = str(payload.get("path", "start"))
         return self._guard(lambda: self.platform.start_charging(path=path))
